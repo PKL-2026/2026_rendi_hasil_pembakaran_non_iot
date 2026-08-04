@@ -212,31 +212,7 @@ Kategori akhir ditentukan berdasarkan \*\*nilai respons terbesar\*\* antara sens
 
 ├── Arduino/
 
-│   └── sketch\_GAS\_FINAL.ino
-
-│
-
-├── Dokumentasi/
-
-│   ├── Diagram Blok
-
-│   ├── Flowchart
-
-│   ├── Pengujian
-
-│   └── Datasheet
-
-│
-
-├── Gambar/
-
-│   ├── Rangkaian
-
-│   ├── Prototype
-
-│   └── LCD
-
-│
+│   └── rendi.ino
 
 └── README.md
 
