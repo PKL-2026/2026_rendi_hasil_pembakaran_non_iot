@@ -246,7 +246,7 @@ Kategori akhir ditentukan berdasarkan \*\*nilai respons terbesar\*\* antara sens
 
 
 
-\*\*Rendi\*\*
+\*\*Nabil\*\* 
 
 
 
@@ -258,9 +258,8 @@ Proyek Akhir 2026
 
 
 
-\## 📄 Lisensi
+\## 📄 Untuk
 
 
 
-Proyek ini dikembangkan untuk keperluan pendidikan, penelitian, dan pengembangan prototipe.
-
+\*\*Rendi\*\* 
