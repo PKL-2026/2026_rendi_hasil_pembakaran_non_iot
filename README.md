@@ -250,16 +250,8 @@ Kategori akhir ditentukan berdasarkan \*\*nilai respons terbesar\*\* antara sens
 
 
 
-Proyek Akhir 2026
+
+\## 📄 Proyek \*\*Rendi\*\* 
 
 
 
-\---
-
-
-
-\## 📄 Untuk
-
-
-
-\*\*Rendi\*\* 
