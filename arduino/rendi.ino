@@ -2,440 +2,66 @@
 #include <LiquidCrystal_I2C.h>
 
 // ======================================================
-// KONFIGURASI PERANGKAT
+// KONFIGURASI PERANGKAT & PIN SENSOR
 // ======================================================
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 
-const byte PIN_MQ2   = 34;
-const byte PIN_MQ135 = 35;
-
-//======================================================
-// MODE FINAL PROYEK
-//======================================================
-
-const unsigned long PEMANASAN_MS   = 60000;   // 60 detik
-const unsigned long BASELINE_MS    = 20000;   // 20 detik
-const unsigned long PERSIAPAN_MS   = 10000;   // 10 detik
-const unsigned long PENGUKURAN_MS  = 60000;   // 60 detik
-const unsigned long JENDELA_STABIL = 20000;   // 20 detik terakhir
-
-const unsigned long INTERVAL_BACA  = 250;
-const unsigned long INTERVAL_LCD   = 500;
+const byte PIN_MQ2   = 34; // Pin analog MQ-2 (Deteksi HC)
+const byte PIN_MQ7   = 32; // Pin analog MQ-7 (Deteksi CO)
+const byte PIN_MQ135 = 35; // Pin analog MQ-135 (Deteksi CO2)
 
 // ======================================================
-// AMBANG KLASIFIKASI RESPONS RELATIF
+// AMBANG BATAS UJI EMISI ASLI (Permen LHK No. 8 Tahun 2023)
+// Kita gunakan standar motor < 2010 (Shogun) sebagai batas maksimal alat
 // ======================================================
-const float AMBANG_SEDANG = 20.0;
-const float AMBANG_TINGGI = 50.0;
-const int AMBANG_BAHAYA = 4000;
-
-// ======================================================
-// VARIABEL HASIL
-// ======================================================
-float baselineMQ2   = 0;
-float baselineMQ135 = 0;
-
-float rataStabilMQ2   = 0;
-float rataStabilMQ135 = 0;
-
-float responsMQ2      = 0;
-float responsMQ135    = 0;
-float responsDominan  = 0;
-
-int minimumMQ2   = 4095;
-int minimumMQ135 = 4095;
-int maksimumMQ2  = 0;
-int maksimumMQ135 = 0;
-
-unsigned long jumlahDataStabil = 0;
-
-const char* kategoriAkhir = "BELUM";
+const int MAKS_PASARAN_HC = 2200;  // Batas HC Maksimum: 2200 ppm
+const int MAKS_PASARAN_CO = 55000; // Batas CO Maksimum: 5.5% = 55000 ppm
 
 // ======================================================
-// MEMBACA SENSOR: RATA-RATA 10 PEMBACAAN
+// KONSTANTA KALIBRASI SENSOR MQ
 // ======================================================
-int bacaSensor(byte pin) {
+float Ro_MQ2   = 1.0;
+float Ro_MQ7   = 1.0;
+float Ro_MQ135 = 1.0;
+
+const float A_MQ2 = 574.25;  const float B_MQ2 = -2.222;  
+const float A_MQ7 = 99.042;  const float B_MQ7 = -1.518;  
+const float A_MQ135 = 110.47; const float B_MQ135 = -2.862; 
+
+// ======================================================
+// VARIABEL TIMING & KONTROL SISTEM (MILLIS)
+// ======================================================
+unsigned long waktuSiklusMQ7 = 0;
+bool faseBacaMQ7 = false;
+
+unsigned long waktuPindahHalaman = 0;
+bool halamanDua = false; // false = Halaman Data PPM, true = Halaman Status
+
+// ======================================================
+// FUNGSI HITUNG RESISTANSI & PPM
+// ======================================================
+float hitungRs(int nilaiADC) {
+  if (nilaiADC <= 0) return 999999.0; 
+  if (nilaiADC >= 4095) return 0.0001;
+  return (4095.0 - nilaiADC) / (float)nilaiADC;
+}
+
+int hitungPPM(int nilaiADC, float Ro, float A_base, float B_slope) {
+  float Rs = hitungRs(nilaiADC);
+  float rasio = Rs / Ro;
+  float ppm = A_base * pow(rasio, B_slope);
+  if (ppm < 0) ppm = 0;
+  if (ppm > 100000) ppm = 100000; // Pembatasan display
+  return (int)ppm;
+}
+
+int bacaADC(byte pin) {
   unsigned long total = 0;
-
   for (byte i = 0; i < 10; i++) {
     total += analogRead(pin);
     delay(2);
   }
-
-  return total / 10;
-}
-
-// ======================================================
-// MEMBERSIHKAN SATU BARIS LCD
-// ======================================================
-void bersihkanBaris(byte baris) {
-  lcd.setCursor(0, baris);
-  lcd.print("                ");
-}
-
-// ======================================================
-// HITUNG MUNDUR
-// ======================================================
-void tampilHitungMundur(const char* judul,
-                        unsigned long durasi) {
-  unsigned long mulai = millis();
-  unsigned long tampilTerakhir = 0;
-
-  lcd.clear();
-
-  while (millis() - mulai < durasi) {
-    unsigned long sekarang = millis();
-    unsigned long berjalan = sekarang - mulai;
-    unsigned long sisa =
-      (durasi - berjalan + 999UL) / 1000UL;
-
-    if (sekarang - tampilTerakhir >= 200 ||
-        tampilTerakhir == 0) {
-      bersihkanBaris(0);
-      lcd.setCursor(0, 0);
-      lcd.print(judul);
-
-      bersihkanBaris(1);
-      lcd.setCursor(0, 1);
-      lcd.print("Sisa:");
-      lcd.print(sisa);
-      lcd.print(" detik");
-
-      tampilTerakhir = sekarang;
-    }
-
-    delay(10);
-  }
-}
-
-// ======================================================
-// PEMANASAN SENSOR
-// ======================================================
-void pemanasanSensor() {
-  Serial.println();
-  Serial.println("===== PEMANASAN SENSOR =====");
-  Serial.println("Biarkan sensor di udara bersih.");
-
-  tampilHitungMundur("PEMANASAN MQ", PEMANASAN_MS);
-
-  Serial.println("Pemanasan selesai.");
-}
-
-// ======================================================
-// MENGAMBIL BASELINE UDARA BERSIH
-// ======================================================
-void ambilBaseline() {
-  unsigned long mulai = millis();
-  unsigned long bacaTerakhir = 0;
-  unsigned long tampilTerakhir = 0;
-
-  unsigned long totalMQ2 = 0;
-  unsigned long totalMQ135 = 0;
-  unsigned long jumlahData = 0;
-
-  Serial.println();
-  Serial.println("===== BASELINE UDARA BERSIH =====");
-  Serial.println("Waktu_s,MQ2,MQ135");
-
-  lcd.clear();
-
-  while (millis() - mulai < BASELINE_MS) {
-    unsigned long sekarang = millis();
-
-    if (sekarang - bacaTerakhir >= INTERVAL_BACA) {
-      bacaTerakhir = sekarang;
-
-      int mq2 = bacaSensor(PIN_MQ2);
-      int mq135 = bacaSensor(PIN_MQ135);
-
-      totalMQ2 += mq2;
-      totalMQ135 += mq135;
-      jumlahData++;
-
-      float waktu = (sekarang - mulai) / 1000.0;
-
-      Serial.print(waktu, 2);
-      Serial.print(",");
-      Serial.print(mq2);
-      Serial.print(",");
-      Serial.println(mq135);
-
-      if (sekarang - tampilTerakhir >= INTERVAL_LCD ||
-          tampilTerakhir == 0) {
-        unsigned long sisa =
-          (BASELINE_MS - (sekarang - mulai) + 999UL) / 1000UL;
-
-        bersihkanBaris(0);
-        lcd.setCursor(0, 0);
-        lcd.print("B2:");
-        lcd.print(mq2);
-        lcd.print(" T:");
-        lcd.print(sisa);
-
-        bersihkanBaris(1);
-        lcd.setCursor(0, 1);
-        lcd.print("B135:");
-        lcd.print(mq135);
-
-        tampilTerakhir = sekarang;
-      }
-    }
-
-    delay(1);
-  }
-
-  if (jumlahData > 0) {
-    baselineMQ2 = (float)totalMQ2 / jumlahData;
-    baselineMQ135 = (float)totalMQ135 / jumlahData;
-  }
-
-  Serial.println();
-  Serial.print("Baseline MQ-2   : ");
-  Serial.println(baselineMQ2, 2);
-  Serial.print("Baseline MQ-135 : ");
-  Serial.println(baselineMQ135, 2);
-
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("B2:");
-  lcd.print(baselineMQ2, 0);
-
-  lcd.setCursor(0, 1);
-  lcd.print("B135:");
-  lcd.print(baselineMQ135, 0);
-
-  delay(3000);
-}
-
-// ======================================================
-// PERSIAPAN SAMPEL
-// ======================================================
-void persiapanSampel() {
-  Serial.println();
-  Serial.println("===== BERIKAN GAS =====");
-  Serial.println("Mulai alirkan gas ke kedua sensor.");
-  Serial.println("Pertahankan gas sampai pengukuran selesai.");
-
-  tampilHitungMundur("BERIKAN GAS", PERSIAPAN_MS);
-}
-
-// ======================================================
-// PENGUKURAN GAS
-// ======================================================
-void ukurSampel() {
-  unsigned long mulai = millis();
-  unsigned long bacaTerakhir = 0;
-  unsigned long tampilTerakhir = 0;
-
-  unsigned long totalStabilMQ2 = 0;
-  unsigned long totalStabilMQ135 = 0;
-
-  jumlahDataStabil = 0;
-
-  minimumMQ2 = 4095;
-  minimumMQ135 = 4095;
-  maksimumMQ2 = 0;
-  maksimumMQ135 = 0;
-
-  Serial.println();
-  Serial.println("===== PENGUKURAN GAS =====");
-  Serial.println("Waktu_s,MQ2,MQ135,Fase");
-
-  lcd.clear();
-
-  while (millis() - mulai < PENGUKURAN_MS) {
-    unsigned long sekarang = millis();
-
-    if (sekarang - bacaTerakhir < INTERVAL_BACA) {
-      delay(1);
-      continue;
-    }
-
-    bacaTerakhir = sekarang;
-
-    unsigned long waktu = sekarang - mulai;
-
-    int mq2 = bacaSensor(PIN_MQ2);
-    int mq135 = bacaSensor(PIN_MQ135);
-
-    if (mq2 < minimumMQ2) minimumMQ2 = mq2;
-    if (mq2 > maksimumMQ2) maksimumMQ2 = mq2;
-
-    if (mq135 < minimumMQ135) minimumMQ135 = mq135;
-    if (mq135 > maksimumMQ135) maksimumMQ135 = mq135;
-
-    bool faseStabil =
-      waktu >= (PENGUKURAN_MS - JENDELA_STABIL);
-
-    if (faseStabil) {
-      totalStabilMQ2 += mq2;
-      totalStabilMQ135 += mq135;
-      jumlahDataStabil++;
-    }
-
-    Serial.print(waktu / 1000.0, 2);
-    Serial.print(",");
-    Serial.print(mq2);
-    Serial.print(",");
-    Serial.print(mq135);
-    Serial.print(",");
-    Serial.println(faseStabil ? "STABIL" : "TRANSISI");
-
-    if (sekarang - tampilTerakhir >= INTERVAL_LCD ||
-        tampilTerakhir == 0) {
-      unsigned long sisa =
-        (PENGUKURAN_MS - waktu + 999UL) / 1000UL;
-
-      bersihkanBaris(0);
-      lcd.setCursor(0, 0);
-      lcd.print("M2:");
-      lcd.print(mq2);
-      lcd.print(" T:");
-      lcd.print(sisa);
-
-      bersihkanBaris(1);
-      lcd.setCursor(0, 1);
-      lcd.print("M135:");
-      lcd.print(mq135);
-
-      tampilTerakhir = sekarang;
-    }
-  }
-
-  if (jumlahDataStabil > 0) {
-    rataStabilMQ2 =
-      (float)totalStabilMQ2 / jumlahDataStabil;
-
-    rataStabilMQ135 =
-      (float)totalStabilMQ135 / jumlahDataStabil;
-  }
-}
-
-// ======================================================
-// MENGHITUNG HASIL
-// ======================================================
-void hitungHasil() {
-  if (baselineMQ2 > 0) {
-    responsMQ2 =
-      ((rataStabilMQ2 - baselineMQ2) /
-       baselineMQ2) * 100.0;
-  }
-
-  if (baselineMQ135 > 0) {
-    responsMQ135 =
-      ((rataStabilMQ135 - baselineMQ135) /
-       baselineMQ135) * 100.0;
-  }
-
-  // Penurunan nilai tidak dihitung sebagai peningkatan gas
-  if (responsMQ2 < 0) responsMQ2 = 0;
-  if (responsMQ135 < 0) responsMQ135 = 0;
-
-  responsDominan = max(responsMQ2, responsMQ135);
-
-  if (maksimumMQ2 >= AMBANG_BAHAYA ||
-      maksimumMQ135 >= AMBANG_BAHAYA) {
-    kategoriAkhir = "BAHAYA";
-  } else if (responsDominan < AMBANG_SEDANG) {
-    kategoriAkhir = "SEHAT";
-  } else if (responsDominan <= AMBANG_TINGGI) {
-    kategoriAkhir = "SEDANG";
-  } else {
-    kategoriAkhir = "TINGGI";
-  }
-}
-
-// ======================================================
-// HASIL SERIAL MONITOR
-// ======================================================
-void cetakHasilSerial() {
-  Serial.println();
-  Serial.println("========== HASIL AKHIR ==========");
-
-  Serial.print("Baseline MQ-2          : ");
-  Serial.println(baselineMQ2, 2);
-  Serial.print("Rata-rata stabil MQ-2  : ");
-  Serial.println(rataStabilMQ2, 2);
-  Serial.print("Minimum MQ-2           : ");
-  Serial.println(minimumMQ2);
-  Serial.print("Maksimum MQ-2          : ");
-  Serial.println(maksimumMQ2);
-  Serial.print("Respons MQ-2           : ");
-  Serial.print(responsMQ2, 2);
-  Serial.println("%");
-
-  Serial.println();
-
-  Serial.print("Baseline MQ-135        : ");
-  Serial.println(baselineMQ135, 2);
-  Serial.print("Rata-rata stabil MQ135 : ");
-  Serial.println(rataStabilMQ135, 2);
-  Serial.print("Minimum MQ-135         : ");
-  Serial.println(minimumMQ135);
-  Serial.print("Maksimum MQ-135        : ");
-  Serial.println(maksimumMQ135);
-  Serial.print("Respons MQ-135         : ");
-  Serial.print(responsMQ135, 2);
-  Serial.println("%");
-
-  Serial.println();
-
-  Serial.print("Respons dominan        : ");
-  Serial.print(responsDominan, 2);
-  Serial.println("%");
-  Serial.print("Kategori akhir         : ");
-  Serial.println(kategoriAkhir);
-
-  if (maksimumMQ2 >= AMBANG_BAHAYA ||
-      maksimumMQ135 >= AMBANG_BAHAYA) {
-    Serial.println("PERINGATAN: ADC mendekati saturasi.");
-  }
-
-  Serial.println("=================================");
-  Serial.println("Tekan EN/RESET untuk mengulang.");
-}
-
-// ======================================================
-// HASIL LCD BERGANTIAN
-// ======================================================
-void tampilkanHasilLCD() {
-  while (true) {
-    lcd.clear();
-    lcd.setCursor(0, 0);
-    lcd.print("HASIL:");
-    lcd.print(kategoriAkhir);
-
-    lcd.setCursor(0, 1);
-    lcd.print("Dominan:");
-    lcd.print(responsDominan, 1);
-    lcd.print("%");
-
-    delay(3000);
-
-    lcd.clear();
-    lcd.setCursor(0, 0);
-    lcd.print("MQ2:");
-    lcd.print(responsMQ2, 1);
-    lcd.print("%");
-
-    lcd.setCursor(0, 1);
-    lcd.print("MQ135:");
-    lcd.print(responsMQ135, 1);
-    lcd.print("%");
-
-    delay(3000);
-
-    lcd.clear();
-    lcd.setCursor(0, 0);
-    lcd.print("Max2:");
-    lcd.print(maksimumMQ2);
-
-    lcd.setCursor(0, 1);
-    lcd.print("Max135:");
-    lcd.print(maksimumMQ135);
-
-    delay(3000);
-  }
+  return total / 10; 
 }
 
 // ======================================================
@@ -443,107 +69,143 @@ void tampilkanHasilLCD() {
 // ======================================================
 void setup() {
   Serial.begin(115200);
-  delay(500);
-
   Wire.begin(21, 22);
 
   lcd.init();
   lcd.backlight();
-  lcd.clear();
-
+  
   analogReadResolution(12);
   analogSetPinAttenuation(PIN_MQ2, ADC_11db);
+  analogSetPinAttenuation(PIN_MQ7, ADC_11db);
   analogSetPinAttenuation(PIN_MQ135, ADC_11db);
 
-  lcd.clear();
-lcd.setCursor(0,0);
-lcd.print("KLASIFIKASI");
+  // ======================================================
+  // 1. PEMANASAN SENSOR (60 DETIK)
+  // ======================================================
+  for (int i = 60; i > 0; i--) {
+    lcd.setCursor(0, 0);
+    lcd.print("  UJI EMISI ");
+    lcd.setCursor(0, 1);
+    lcd.print("  PEMANASAN: ");
+    if (i < 10) lcd.print("0"); // Tambah angka 0 agar tampil 2 digit
+    lcd.print(i);
+    lcd.print("s  ");
+    delay(1000);
+  }
 
-lcd.setCursor(0,1);
-lcd.print("RESPONS GAS");
-
-  Serial.println();
-Serial.println("=================================");
-  Serial.println("Sensor : MQ-2 & MQ-135");
-  Serial.println("Mikrokontroler : ESP32");
-  Serial.println("Supply Sensor : 5 Volt");
-  Serial.println("ADC ESP32 : 12-bit");
-Serial.println("MQ-2 DAN MQ-135");
-Serial.println("Sensor Supply : 5V");
-Serial.println("ESP32 ADC     : 12-bit");
-Serial.println("=================================");
-
-  delay(3000);
-
-  pemanasanSensor();
-  ambilBaseline();
-  persiapanSampel();
-
+  // ======================================================
+  // 2. TAMPILKAN "UJI COBA DIMULAI"
+  // ======================================================
   lcd.clear();
   lcd.setCursor(0, 0);
-  lcd.print("MENGUKUR GAS");
+  lcd.print("   UJI  COBA    ");
   lcd.setCursor(0, 1);
-  lcd.print("Gas tetap masuk");
+  lcd.print("    DIMULAI!    ");
+  delay(2000);
 
-  delay(1000);
+  // ======================================================
+  // 3. KALIBRASI SENSOR RO (UDARA BERSIH)
+  // ======================================================
+  lcd.clear();
+  lcd.setCursor(0, 0); lcd.print("ALAT UJI EMISI");
+  lcd.setCursor(0, 1); lcd.print("HASIL PEMBAKARAN");
+  
+  long totalMQ2 = 0, totalMQ7 = 0, totalMQ135 = 0;
+  for (int i = 0; i < 50; i++) {
+    totalMQ2 += analogRead(PIN_MQ2);
+    totalMQ7 += analogRead(PIN_MQ7);
+    totalMQ135 += analogRead(PIN_MQ135);
+    delay(100);
+  }
+  Ro_MQ2   = hitungRs(totalMQ2 / 50);
+  Ro_MQ7   = hitungRs(totalMQ7 / 50);
+  Ro_MQ135 = hitungRs(totalMQ135 / 50);
 
-  ukurSampel();
-  hitungHasil();
-  cetakHasilSerial();
-  tampilkanHasilLCD();
+  waktuSiklusMQ7 = millis();
+  waktuPindahHalaman = millis();
+  lcd.clear();
 }
 
 // ======================================================
-// LOOP
+// LOOP UTAMA
 // ======================================================
 void loop() {
-  // Pengujian berlangsung satu kali.
-  // Tekan tombol EN/RESET untuk mengulang.
+  // Logika Software Siklus Semu MQ-7
+  if (millis() - waktuSiklusMQ7 > 60000) {
+    faseBacaMQ7 = !faseBacaMQ7;
+    waktuSiklusMQ7 = millis();
+  }
+
+  // 1. Baca nilai raw ADC ketiga sensor
+  int adc_mq2   = bacaADC(PIN_MQ2);
+  int adc_mq7   = bacaADC(PIN_MQ7);
+  int adc_mq135 = bacaADC(PIN_MQ135);
+
+  // 2. Hitung nilai PPM masing-masing gas
+  int ppmHC  = hitungPPM(adc_mq2,   Ro_MQ2,   A_MQ2,   B_MQ2);   
+  int ppmCO  = hitungPPM(adc_mq7,   Ro_MQ7,   A_MQ7,   B_MQ7);   
+  int ppmCO2 = hitungPPM(adc_mq135, Ro_MQ135, A_MQ135, B_MQ135);  
+
+  // 3. Logika Kelulusan Asli
+  String statusLayar = "LULUS UJI";
+  if (ppmHC > MAKS_PASARAN_HC || ppmCO > MAKS_PASARAN_CO) {
+    statusLayar = "TIDAK LULUS";
+  }
+
+  // ======================================================
+  // LOGIKA PERGANTIAN HALAMAN LCD (Tiap 3 Detik / 3000 ms)
+  // ======================================================
+  if (millis() - waktuPindahHalaman > 3000) {
+    halamanDua = !halamanDua; // Tukar status halaman
+    waktuPindahHalaman = millis();
+    lcd.clear(); // Bersihkan layar agar teks halaman sebelumnya tidak menumpuk
+  }
+
+  // 4. Manajemen Tampilan Layar LCD
+  if (halamanDua == false) {
+    // --------------------------------------------------
+    // HALAMAN 1: TAMPILAN DATA ANGKA PPM REAL-TIME
+    // --------------------------------------------------
+    // Baris 1: Tampilkan data polutan utama (HC dan CO)
+    lcd.setCursor(0, 0);
+    lcd.print("HC:"); lcd.print(ppmHC);
+    lcd.print(" CO:"); lcd.print(ppmCO);
+    lcd.print("      "); // Menghapus sisa karakter angka lama
+
+    // Baris 2: Tampilkan CO2
+    lcd.setCursor(0, 1);
+    lcd.print("CO2:"); lcd.print(ppmCO2);
+    lcd.print(" ppm      ");
+    
+  } else {
+    // --------------------------------------------------
+    // HALAMAN 2: TAMPILAN STATUS KELULUSAN (KEDAP-KEDIP)
+    // --------------------------------------------------
+    // Membuat efek kedap-kedip tanpa delay berbasis sisa waktu millis (Tiap 500ms)
+    if ((millis() / 500) % 2 == 0) {
+      lcd.setCursor(0, 0);
+      lcd.print("  HASIL UTAMA:  ");
+      
+      lcd.setCursor(0, 1);
+      if (statusLayar == "LULUS UJI") {
+        lcd.print("   LULUS UJI   "); // Diposisikan di tengah layar 16x2
+      } else {
+        lcd.print("  TIDAK LULUS   "); // Diposisikan di tengah layar 16x2
+      }
+    } else {
+      // Saat kedip mati, kosongkan baris tulisan status agar terlihat berkedip
+      lcd.setCursor(0, 0);
+      lcd.print("  HASIL UTAMA:  ");
+      lcd.setCursor(0, 1);
+      lcd.print("                "); // Kosong 16 spasi (efek kedip mati)
+    }
+  }
+
+  // 5. Cetak Detail ke Serial Monitor (Untuk Backup Data di Laptop)
+  Serial.print("HC: "); Serial.print(ppmHC);
+  Serial.print(" | CO: "); Serial.print(ppmCO);
+  Serial.print(" | CO2: "); Serial.print(ppmCO2);
+  Serial.print(" | STATUS: "); Serial.println(statusLayar);
+  
+  delay(100); // Diperkecil menjadi 100ms agar efek kedap-kedip LCD sangat halus dan akurat
 }
-
-//================== RINGKASAN HASIL ==================
-void tampilRingkasan(float respMQ2,float respMQ135,String kategori){
-  Serial.println();
-  Serial.println("==========================");
-  Serial.println("HASIL PENGUJIAN");
-  Serial.println("==========================");
-  Serial.print("Baseline MQ-2    : "); Serial.println(baselineMQ2);
-  Serial.print("Baseline MQ-135  : "); Serial.println(baselineMQ135);
-  Serial.print("Respons MQ-2 (%) : "); Serial.println(respMQ2,2);
-  Serial.print("Respons MQ-135(%): "); Serial.println(respMQ135,2);
-  Serial.print("MQ-2 Maksimum    : "); Serial.println(maksimumMQ2);
-  Serial.print("MQ-135 Maksimum  : "); Serial.println(maksimumMQ135);
-  Serial.print("Kategori         : "); Serial.println(kategori);
-  Serial.println("==========================");
-}
-
-//==================== KATEGORI LCD ====================
-String kategoriGas(float respons){
-  if(respons < 10.0) return "SEHAT";
-  else if(respons < 30.0) return "SEDANG";
-  else if(respons < 60.0) return "TINGGI";
-  else return "BAHAYA";
-}
-
-/*
-Contoh penggunaan setelah menghitung respons:
-float responsTerbesar = max(responsMQ2, responsMQ135);
-String status = kategoriGas(responsTerbesar);
-
-lcd.clear();
-lcd.setCursor(0,0);
-lcd.print("MQ2:");
-lcd.print(responsMQ2,1);
-lcd.print("%");
-
-lcd.setCursor(0,1);
-lcd.print("MQ135:");
-lcd.print(responsMQ135,1);
-lcd.print("%");
-
-lcd.setCursor(0,2);
-lcd.print("STATUS:");
-
-lcd.setCursor(0,3);
-lcd.print(status);
-*/
