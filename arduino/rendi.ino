@@ -8,7 +8,7 @@ LiquidCrystal_I2C lcd(0x27, 16, 2);
 
 const byte PIN_MQ2   = 34; // Pin analog MQ-2 (Deteksi HC)
 const byte PIN_MQ7   = 32; // Pin analog MQ-7 (Deteksi CO)
-const byte PIN_MQ135 = 35; // Pin analog MQ-135 (Deteksi CO2)
+const byte PIN_MQ135 = 33; // Pin analog MQ-135 (Deteksi CO2) - Diubah ke pin 33
 
 // ======================================================
 // AMBANG BATAS UJI EMISI ASLI (Permen LHK No. 8 Tahun 2023)
@@ -84,9 +84,9 @@ void setup() {
   // ======================================================
   for (int i = 60; i > 0; i--) {
     lcd.setCursor(0, 0);
-    lcd.print("  UJI EMISI ");
+    lcd.print("<--UJI EMISI--> ");
     lcd.setCursor(0, 1);
-    lcd.print("  PEMANASAN: ");
+    lcd.print(" PEMANASAN: ");
     if (i < 10) lcd.print("0"); // Tambah angka 0 agar tampil 2 digit
     lcd.print(i);
     lcd.print("s  ");
@@ -144,7 +144,12 @@ void loop() {
   // 2. Hitung nilai PPM masing-masing gas
   int ppmHC  = hitungPPM(adc_mq2,   Ro_MQ2,   A_MQ2,   B_MQ2);   
   int ppmCO  = hitungPPM(adc_mq7,   Ro_MQ7,   A_MQ7,   B_MQ7);   
-  int ppmCO2 = hitungPPM(adc_mq135, Ro_MQ135, A_MQ135, B_MQ135);  
+  
+  // Karena MQ135 sering menyentuh ADC 0 di udara bersih (yang merusak rumus logaritmik),
+  // kita ubah pembacaan CO2 menggunakan pemetaan linier (Linear Mapping).
+  // Nilai 0 ADC = 400 ppm (CO2 udara bersih), 4095 ADC = 9999 ppm (CO2 maksimal).
+  int ppmCO2 = map(adc_mq135, 0, 4095, 400, 9999);
+  if (ppmCO2 > 9999) ppmCO2 = 9999;
 
   // 3. Logika Kelulusan Asli
   String statusLayar = "LULUS UJI";
