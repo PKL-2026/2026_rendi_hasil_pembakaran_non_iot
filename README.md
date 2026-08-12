@@ -97,7 +97,7 @@ Jika pembacaan gas melampaui salah satu dari batas toleransi tersebut, sistem ak
 *
 *
 
-*NOTE :
+###__*NOTE :__
 Viewed file .ino . . .
 
 Pertanyaan yang sangat kritis dan sangat bagus! Mari kita bedah satu per satu supaya Anda benar-benar yakin dengan alat yang Anda buat:
