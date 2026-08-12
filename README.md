@@ -65,7 +65,7 @@ Jika pembacaan gas melampaui salah satu dari batas toleransi tersebut, sistem ak
 - **Layar:** LCD 16x2 I2C (Terhubung ke Pin 21 untuk SDA, dan Pin 22 untuk SCL)[cite: 1]
 - **Sensor MQ-2:** Terhubung ke Pin Analog 34[cite: 1]
 - **Sensor MQ-7:** Terhubung ke Pin Analog 32[cite: 1]
-- **Sensor MQ-135:** Terhubung ke Pin Analog 35[cite: 1]
+- **Sensor MQ-135:** Terhubung ke Pin Analog 33[cite: 1]
 - Modul I2C, Kabel Jumper, Kabel Micro USB, dan Box Proyek
 
 ---
